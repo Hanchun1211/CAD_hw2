@@ -28,20 +28,37 @@ typedef struct CellLibrary {
     vector<vector<double>> fall_transition;
 } CellLibrary;
 
-typedef struct Gate {
+class Gate {
+public:
     string name;
     string type;
     vector<string> input_ports;
     vector<string> input_wires;
     string output_port;
     string output_wire;
-    int input_num_in_topological{};
-    bool isOutput{};
-    list<int> next;
-    list<int> prev;
-    double critical_cell_delay{};
-    double critical_transition{};
-} Gate;
+    int input_num_in_topological = 0;   // Use to compute topological sort
+    bool isOutput = false;              // If this gate is an output
+    vector<Gate *> next;                  // Index of following gates
+    vector<Gate *> prev;                  // Index of previous gates
+    double critical_cell_delay = 0.0;
+    double critical_transition = 0.0;
+
+    Gate() = default;
+
+    bool out_value = false; // The output value of this gate
+    bool calc_output() {    // Compute the output value of this gate
+        if (name == "NOR2X1") {
+            out_value = !(prev[0]->out_value || prev[1]->out_value);
+        } else if (name == "INVX1") {
+            out_value = !prev.front()->out_value;
+        } else if (name == "NANDX1") {
+            out_value = !(prev[0]->out_value && prev[1]->out_value);
+        } else {
+            cerr << "Undefined gate name" << endl;
+        }
+        return out_value;
+    }
+};
 
 class Module {
 public:
@@ -78,7 +95,7 @@ void Module::topological_sort() {
 
         // Find and flag output gates
         for (auto &j : output) {
-            if (std::find(gates[i].input_wires.begin(), gates[i].input_wires.end(), j) != gates[i].input_wires.end()) {
+            if (gates[i].output_wire == j) {
                 output_gates.push_back(i);
                 gates[i].isOutput = true;
                 break;
@@ -108,8 +125,8 @@ void Module::topological_sort() {
             for (int j = 0; j < gates[i].input_wires.size(); j++) {
                 if (gates[i].input_wires[j] == out) {
                     gates[i].input_num_in_topological++;
-                    gates[i].prev.push_back(index);
-                    gates[index].next.push_back(i);
+                    gates[i].prev.push_back(&gates[index]);
+                    gates[index].next.push_back(&gates[i]);
                     if (gates[i].input_num_in_topological == gates[i].input_wires.size()) {
                         queue.push_back(i);
                     }
@@ -165,71 +182,70 @@ double Module::lookup_table(double &row, double &col, vector<double> &row_index,
 }
 
 void Module::max_delay_path_calculation(int cur_gate_index, double total_output_net_cap, CellLibrary &cell) {
-    int max_path_prev_gate_index = -1;
-    double prev_max_delay = 0;
-    double prev_max_transition = 0;
-    if (!gates[cur_gate_index].prev.empty()) {
-        prev_max_delay = max_delay[gates[cur_gate_index].prev.front()];
-        prev_max_transition = gates[gates[cur_gate_index].prev.front()].critical_transition;
-        max_delay_path_from_prev_gate[cur_gate_index] = gates[cur_gate_index].prev.front();
-
-        for (auto lp = gates[cur_gate_index].prev.begin();
-             lp != gates[cur_gate_index].prev.end(); lp++) {
-            if (gates[*lp].critical_transition > prev_max_transition) {
-                prev_max_transition = gates[*lp].critical_transition;
-            }
-            if (max_delay[*lp] > prev_max_delay) {
-                prev_max_delay = max_delay[*lp];
-                max_delay_path_from_prev_gate[cur_gate_index] = *lp;
-            }
-        }
-    }
-    max_path_prev_gate_index = max_delay_path_from_prev_gate[cur_gate_index];
-
-    double max_input_transition = prev_max_transition;
-
-    double cell_rise = lookup_table(max_input_transition, total_output_net_cap, cell.index_2, cell.index_1,
-                                    cell.cell_rise);
-    double cell_fall = lookup_table(max_input_transition, total_output_net_cap, cell.index_2, cell.index_1,
-                                    cell.cell_fall);
-    gates[cur_gate_index].critical_cell_delay = (cell_rise > cell_fall) ? cell_rise : cell_fall;
-
-    double rise_transition = lookup_table(max_input_transition, total_output_net_cap, cell.index_2, cell.index_1,
-                                          cell.rise_transition);
-    double fall_transition = lookup_table(max_input_transition, total_output_net_cap, cell.index_2, cell.index_1,
-                                          cell.fall_transition);
-    gates[cur_gate_index].critical_transition = (rise_transition + fall_transition) / 2.0;
-
-    max_delay[cur_gate_index] = prev_max_delay + gates[cur_gate_index].critical_cell_delay;
+//    int max_path_prev_gate_index = -1;
+//    double prev_max_delay = 0;
+//    double prev_max_transition = 0;
+//    if (!gates[cur_gate_index].prev.empty()) {
+//        prev_max_delay = max_delay[gates[cur_gate_index].prev.front()];
+//        prev_max_transition = gates[gates[cur_gate_index].prev.front()].critical_transition;
+//        max_delay_path_from_prev_gate[cur_gate_index] = gates[cur_gate_index].prev.front();
+//
+//        for (auto lp = gates[cur_gate_index].prev.begin();
+//             lp != gates[cur_gate_index].prev.end(); lp++) {
+//            if (gates[*lp].critical_transition > prev_max_transition) {
+//                prev_max_transition = gates[*lp].critical_transition;
+//            }
+//            if (max_delay[*lp] > prev_max_delay) {
+//                prev_max_delay = max_delay[*lp];
+//                max_delay_path_from_prev_gate[cur_gate_index] = *lp;
+//            }
+//        }
+//    }
+//    max_path_prev_gate_index = max_delay_path_from_prev_gate[cur_gate_index];
+//
+//    double max_input_transition = prev_max_transition;
+//
+//    double cell_rise = lookup_table(max_input_transition, total_output_net_cap, cell.index_2, cell.index_1,
+//                                    cell.cell_rise);
+//    double cell_fall = lookup_table(max_input_transition, total_output_net_cap, cell.index_2, cell.index_1,
+//                                    cell.cell_fall);
+//    gates[cur_gate_index].critical_cell_delay = (cell_rise > cell_fall) ? cell_rise : cell_fall;
+//
+//    double rise_transition = lookup_table(max_input_transition, total_output_net_cap, cell.index_2, cell.index_1,
+//                                          cell.rise_transition);
+//    double fall_transition = lookup_table(max_input_transition, total_output_net_cap, cell.index_2, cell.index_1,
+//                                          cell.fall_transition);
+//    gates[cur_gate_index].critical_transition = (rise_transition + fall_transition) / 2.0;
+//
+//    max_delay[cur_gate_index] = prev_max_delay + gates[cur_gate_index].critical_cell_delay;
 }
 
-// TODO: Fix stack error
 void Module::delay(map<string, CellLibrary> &cells) {
-    for (int i = 0; i < gates.size(); i++) {
-        max_delay.push_back(0);
-        max_delay_path_from_prev_gate.push_back(-1);
-    }
-
-    for (int cur_gate_index : topological_order) {
-        double total_output_net_cap = (gates[cur_gate_index].isOutput) ? 0.03 : 0.0; // Primary output loading is 0.03
-        for (auto lp = gates[cur_gate_index].next.begin();
-             lp != gates[cur_gate_index].next.end(); lp++) {
-            for (int k = 0; k < gates[*lp].input_wires.size() - 1; k++) {
-                if (gates[cur_gate_index].input_wires.back() == gates[*lp].input_wires[k]) {
-                    total_output_net_cap += cells[gates[*lp].type].pins[gates[*lp].input_ports[k]].cap;
-                    break;
-                }
-            }
-        }
-
-        max_delay_path_calculation(cur_gate_index, total_output_net_cap, cells[gates[cur_gate_index].type]);
-    }
-
-    critical_path_out_index = output_gates.front();
-    for (int i = 1; i < output_gates.size(); i++) {
-        if (max_delay[output_gates[i]] > max_delay[critical_path_out_index])
-            critical_path_out_index = output_gates[i];
-    }
+//    for (int i = 0; i < gates.size(); i++) {
+//        max_delay.push_back(0);
+//        max_delay_path_from_prev_gate.push_back(-1);
+//    }
+//
+//    for (int cur_gate_index : topological_order) {
+//        double total_output_net_cap = (gates[cur_gate_index].isOutput) ? 0.03 : 0.0; // Primary output loading is 0.03
+//        for (auto lp = gates[cur_gate_index].next.begin();
+//             lp != gates[cur_gate_index].next.end(); lp++) {
+//            for (int k = 0; k < gates[*lp].input_wires.size(); k++) {
+//                if (gates[cur_gate_index].output_wire == gates[*lp].input_wires[k]) {
+//                    total_output_net_cap += cells[gates[*lp].type].pins[gates[*lp].input_ports[k]].cap;
+//                    break;
+//                }
+//            }
+//        }
+//
+//        max_delay_path_calculation(cur_gate_index, total_output_net_cap, cells[gates[cur_gate_index].type]);
+//    }
+//
+//    critical_path_out_index = output_gates.front();
+//    for (int i = 1; i < output_gates.size(); i++) {
+//        if (max_delay[output_gates[i]] > max_delay[critical_path_out_index])
+//            critical_path_out_index = output_gates[i];
+//    }
 }
 
 void Module::output_file() {
@@ -269,9 +285,14 @@ enum line {
 
 class Parser {
 public:
+    vector<string> input_wires;         // Wire order of input patterns
+    vector<vector<bool>> input_patterns; // Each patterns' input
+
     static void parse_cell_lib(char *file, map<string, CellLibrary> &cells);
 
     static void parse_module(char *file, Module &m, const map<string, CellLibrary> &cells);
+
+    void parse_pattern(char *pat_name);
 
 private:
     static void parse_lu_table(fstream &fin, vector<double> &i1, vector<double> &i2);
@@ -352,7 +373,7 @@ vector<string> Parser::tokenize(string &raw_str) {
 
 string Parser::remove_comment_and_space(string &original_str) {
     string cleaned_str;
-    const std::regex reg(R"(\/\/[^\n\r]*\n|\/\*[\s\S]*\*\/|[\s\t\n]*)");    // Verilog comment format
+    const std::regex reg(R"(\/\/[^\n\r]*|\/\*[\s\S]*\*\/|[\s\t\n]*)");    // Verilog comment format
     std::regex_replace(std::back_inserter(cleaned_str), original_str.begin(), original_str.end(), reg, "");
     return cleaned_str;
 }
@@ -612,6 +633,40 @@ void Parser::parse_module(char *file, Module &m, const map<string, CellLibrary> 
     fin.close();
 }
 
+void Parser::parse_pattern(char *pat_name) {
+    fstream fin;
+    fin.open(pat_name, ios::in);
+    if (!fin) {
+        cerr << "Fail to open: " << pat_name << endl;
+        exit(1);
+    }
+
+    string line;
+    getline(fin, line);
+    while (tokenize(line).front() != "input")
+        getline(fin, line);
+    // input n1, n2, n3
+    // Store n1 n2 n3 in input_wires
+    for (auto &w: tokenize(line)) {
+        if (w == "input") continue;
+        input_wires.push_back(w);
+    }
+
+    while (getline(fin, line)) {
+        line = remove_comment_and_space(line);
+        if (line == ".end") break;
+        vector<bool> pattern;
+        pattern.reserve(input_wires.size());
+        for (int i = 0; i < input_wires.size(); ++i) {
+            if (line[i] == '0')
+                pattern.push_back(false);
+            else
+                pattern.push_back(true);
+        }
+        input_patterns.push_back(pattern);
+    }
+}
+
 int main(int argc, char *argv[]) {
     map<string, CellLibrary> cells;
     Module module;
@@ -647,9 +702,13 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    // Build circuit
     parser.parse_cell_lib(lib_path, cells);
     parser.parse_module(argv[1], module, cells);
     module.topological_sort();
+
+    // Input pattern
+    parser.parse_pattern(pattern_path);
     module.delay(cells);
     module.output_file();
     return 0;
