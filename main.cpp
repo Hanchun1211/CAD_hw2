@@ -34,6 +34,7 @@ public:
     string type;
     vector<string> input_ports;
     vector<string> input_wires;
+    vector<bool> input_value;
     string output_port;
     string output_wire;
     int input_num_in_topological = 0;   // Use to compute topological sort
@@ -46,13 +47,37 @@ public:
     Gate() = default;
 
     bool out_value = false; // The output value of this gate
-    bool calc_output() {    // Compute the output value of this gate
-        if (name == "NOR2X1") {
-            out_value = !(prev[0]->out_value || prev[1]->out_value);
-        } else if (name == "INVX1") {
-            out_value = !prev.front()->out_value;
-        } else if (name == "NANDX1") {
-            out_value = !(prev[0]->out_value && prev[1]->out_value);
+
+    bool calc_output(const vector<string> &in_wires, const vector<bool> &pat) {
+        // Compute the output value of this gate
+        // Set input pattern
+        input_value.clear();
+        std::map<string, bool> pattern;
+        if (in_wires.size() == pat.size()) {
+            for (auto i = 0; i < in_wires.size(); ++i) {
+                pattern[in_wires[i]] = pat[i];
+            }
+        } else {
+            cerr << "Pattern error!" << endl;
+        }
+
+        for (auto &iw:input_wires) {
+            if (pattern.find(iw) != pattern.end()) {
+                input_value.push_back(pattern[iw]);
+            }
+        }
+        if (!prev.empty()) {
+            for (auto &g:prev) {
+                input_value.push_back(g->out_value);
+            }
+        }
+
+        if (type == "NOR2X1") {
+            out_value = !(input_value[0] || input_value[1]);
+        } else if (type == "INVX1") {
+            out_value = !input_value[0];
+        } else if (type == "NANDX1") {
+            out_value = !(input_value[0] && input_value[1]);
         } else {
             cerr << "Undefined gate name" << endl;
         }
@@ -78,6 +103,8 @@ public:
     void delay(map<string, CellLibrary> &cells);
 
     void output_file();
+
+    void calc_output(const vector<string> &in_wires, const vector<bool> &pattern);
 
 private:
     void max_delay_path_calculation(int index, double total_output_net_cap, CellLibrary &cell);
@@ -273,6 +300,13 @@ void Module::output_file() {
         fout << max_delay_path[i] << " -> ";
     fout << max_delay_path.front() << endl;
     fout.close();
+}
+
+void Module::calc_output(const vector<string> &in_wires, const vector<bool> &pattern) {
+    // Calculate output for each gate by topological order
+    for (auto &idx:topological_order) {
+        gates[idx].calc_output(in_wires, pattern);
+    }
 }
 
 enum line {
@@ -702,14 +736,18 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    // Build circuit
     parser.parse_cell_lib(lib_path, cells);
+    // Build circuit
     parser.parse_module(argv[1], module, cells);
     module.topological_sort();
-
     // Input pattern
     parser.parse_pattern(pattern_path);
-    module.delay(cells);
-    module.output_file();
+    // Simulation process
+    for (auto &pat:parser.input_patterns) {
+        module.calc_output(parser.input_wires, pat);
+        module.delay(cells);    // TODO: Calc each gate delay based on output value
+        module.output_file();
+    }
+
     return 0;
 }
