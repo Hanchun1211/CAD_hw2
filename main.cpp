@@ -73,10 +73,19 @@ public:
         }
 
         if (type == "NOR2X1") {
+            if (input_value.size() != 2) {
+                cerr << name << " NOR2X1 input value error!" << endl;
+            }
             out_value = !(input_value[0] || input_value[1]);
         } else if (type == "INVX1") {
+            if (input_value.size() != 1) {
+                cerr << name << " INVX1 input value error!" << endl;
+            }
             out_value = !input_value[0];
         } else if (type == "NANDX1") {
+            if (input_value.size() != 2) {
+                cerr << name << " NANDX1 input value error!" << endl;
+            }
             out_value = !(input_value[0] && input_value[1]);
         } else {
             cerr << "Undefined gate name" << endl;
