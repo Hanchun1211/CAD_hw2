@@ -824,7 +824,7 @@ int main(int argc, char *argv[]) {
     // Simulation process
     for (auto &pat:parser.input_patterns) {
         module.calc_output_and_delay(parser.input_wires, pat, cells);
-        module.delay(cells);    // TODO: Calc each gate delay based on output value
+        module.delay(cells);    // TODO: Calc critical path
         module.output_file();
     }
 
