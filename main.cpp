@@ -54,7 +54,9 @@ public:
     bool out_value = false; // The output value of this gate
     double input_transition_delay = 0.0;    // Max of prev.gate_delay
     double output_cap = 0.0;                // Sum of next cap
-    double gate_delay = 0.0;    // Lookup table based on input_transition_delay, output_cap. Consider output_value
+    double propagation_delay = 0.0;
+    double rise_fall_time = 0.0;
+    double gate_delay = 0.0;    // propagation_delay + rise_fall_time
     double critical_cell_delay = 0.0;       // Global delay
     double critical_transition = 0.0;       // Global delay
 
@@ -94,9 +96,9 @@ public:
                 out_value = !(input_value[0] || input_value[1]);
                 // Primary input delay is 0.0
                 if (prev.size() == 2) {
-                    input_transition_delay = std::max(prev[0]->gate_delay, prev[1]->gate_delay);
+                    input_transition_delay = std::max(prev[0]->rise_fall_time, prev[1]->rise_fall_time);
                 } else if (prev.size() == 1) {
-                    input_transition_delay = prev.front()->gate_delay;
+                    input_transition_delay = prev.front()->rise_fall_time;
                 } else {
                     input_transition_delay = 0.0;
                 }
@@ -107,7 +109,7 @@ public:
             } else {
                 out_value = !input_value[0];
                 // Primary input delay is 0.0
-                input_transition_delay = (prev.empty()) ? 0.0 : prev.front()->gate_delay;
+                input_transition_delay = (prev.empty()) ? 0.0 : prev.front()->rise_fall_time;
             }
         } else if (type == "NANDX1") {
             if (input_value.size() != 2) {
@@ -116,9 +118,9 @@ public:
                 out_value = !(input_value[0] && input_value[1]);
                 // Primary input delay is 0.0
                 if (prev.size() == 2) {
-                    input_transition_delay = std::max(prev[0]->gate_delay, prev[1]->gate_delay);
+                    input_transition_delay = std::max(prev[0]->rise_fall_time, prev[1]->rise_fall_time);
                 } else if (prev.size() == 1) {
-                    input_transition_delay = prev.front()->gate_delay;
+                    input_transition_delay = prev.front()->rise_fall_time;
                 } else {
                     input_transition_delay = 0.0;
                 }
@@ -126,9 +128,6 @@ public:
         } else {
             cerr << "Undefined gate name" << endl;
         }
-
-        // Calculate output capacitance, sum of next input cap
-
 
         return out_value;
     }
@@ -153,16 +152,16 @@ public:
 
     void output_file();
 
-    void calc_output(const vector<string> &in_wires,
-                     const vector<bool> &pattern,
-                     const map<string, CellLibrary> &cells);
+    void calc_output_and_delay(const vector<string> &in_wires,
+                               const vector<bool> &pattern,
+                               map<string, CellLibrary> &cells);
 
 private:
     void max_delay_path_calculation(int index, double total_output_net_cap, CellLibrary &cell);
 
-    static double
-    lookup_table(double &row, double &col, vector<double> &row_index, vector<double> &col_index,
-                 vector<vector<double>> &table);
+    static double lookup_table(double &row, double &col,
+                               vector<double> &row_index, vector<double> &col_index,
+                               vector<vector<double>> &table);
 };
 
 void Module::topological_sort() {
@@ -215,8 +214,10 @@ void Module::topological_sort() {
     }
 }
 
-double Module::lookup_table(double &row, double &col, vector<double> &row_index, vector<double> &col_index,
-                            vector<vector<double> > &table) {
+double Module::lookup_table(double &row, double &col,
+                            vector<double> &row_index,
+                            vector<double> &col_index,
+                            vector<vector<double>> &table) {
     int row_end_index = (int) row_index.size() - 1;
     int col_end_index = (int) col_index.size() - 1;
     int index_row1 = row_end_index;
@@ -353,12 +354,26 @@ void Module::output_file() {
     fout.close();
 }
 
-void Module::calc_output(const vector<string> &in_wires,
-                         const vector<bool> &pattern,
-                         const map<string, CellLibrary> &cells) {
+void Module::calc_output_and_delay(const vector<string> &in_wires,
+                                   const vector<bool> &pattern,
+                                   map<string, CellLibrary> &cells) {
     // Calculate output for each gate by topological order
     for (auto &idx:topological_order) {
         gates[idx].calc_output(in_wires, pattern, cells);
+        gates[idx].output_cap = wires[gates[idx].output_wire].net_cap;
+        CellLibrary cell = cells[gates[idx].type];
+        if (gates[idx].out_value) {
+            gates[idx].propagation_delay = lookup_table(gates[idx].input_transition_delay, gates[idx].output_cap,
+                                                        cell.index_2, cell.index_1, cell.cell_rise);
+            gates[idx].rise_fall_time = lookup_table(gates[idx].input_transition_delay, gates[idx].output_cap,
+                                                     cell.index_2, cell.index_1, cell.rise_transition);
+        } else {
+            gates[idx].propagation_delay = lookup_table(gates[idx].input_transition_delay, gates[idx].output_cap,
+                                                        cell.index_2, cell.index_1, cell.cell_fall);
+            gates[idx].rise_fall_time = lookup_table(gates[idx].input_transition_delay, gates[idx].output_cap,
+                                                     cell.index_2, cell.index_1, cell.fall_transition);
+        }
+        gates[idx].gate_delay = gates[idx].propagation_delay + gates[idx].rise_fall_time;
     }
 }
 
@@ -808,7 +823,7 @@ int main(int argc, char *argv[]) {
     parser.parse_pattern(pattern_path);
     // Simulation process
     for (auto &pat:parser.input_patterns) {
-        module.calc_output(parser.input_wires, pat, cells);
+        module.calc_output_and_delay(parser.input_wires, pat, cells);
         module.delay(cells);    // TODO: Calc each gate delay based on output value
         module.output_file();
     }
