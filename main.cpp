@@ -15,10 +15,19 @@ using namespace std;
 typedef struct Pin {
     string name;
     string direct;
-    double cap{};
+    double cap = 0.0;
 } Pin;
 
-typedef struct CellLibrary {
+class Wire {
+public:
+    string name;
+    string fan_in;
+    vector<string> fan_out;
+    double net_cap = 0.0;
+};
+
+class CellLibrary {
+public:
     string name;
     map<string, Pin> pins;
     vector<double> index_1, index_2;
@@ -26,7 +35,7 @@ typedef struct CellLibrary {
     vector<vector<double>> cell_fall;
     vector<vector<double>> rise_transition;
     vector<vector<double>> fall_transition;
-} CellLibrary;
+};
 
 class Gate {
 public:
@@ -41,14 +50,19 @@ public:
     bool isOutput = false;              // If this gate is an output
     vector<Gate *> next;                  // Index of following gates
     vector<Gate *> prev;                  // Index of previous gates
-    double critical_cell_delay = 0.0;
-    double critical_transition = 0.0;
+
+    bool out_value = false; // The output value of this gate
+    double input_transition_delay = 0.0;    // Max of prev.gate_delay
+    double output_cap = 0.0;                // Sum of next cap
+    double gate_delay = 0.0;    // Lookup table based on input_transition_delay, output_cap. Consider output_value
+    double critical_cell_delay = 0.0;       // Global delay
+    double critical_transition = 0.0;       // Global delay
 
     Gate() = default;
 
-    bool out_value = false; // The output value of this gate
-
-    bool calc_output(const vector<string> &in_wires, const vector<bool> &pat) {
+    bool calc_output(const vector<string> &in_wires,
+                     const vector<bool> &pat,
+                     const map<string, CellLibrary> &cells) {
         // Compute the output value of this gate
         // Set input pattern
         input_value.clear();
@@ -72,24 +86,50 @@ public:
             }
         }
 
+        // Calculate output value and input transition delay
         if (type == "NOR2X1") {
             if (input_value.size() != 2) {
                 cerr << name << " NOR2X1 input value error!" << endl;
+            } else {
+                out_value = !(input_value[0] || input_value[1]);
+                // Primary input delay is 0.0
+                if (prev.size() == 2) {
+                    input_transition_delay = std::max(prev[0]->gate_delay, prev[1]->gate_delay);
+                } else if (prev.size() == 1) {
+                    input_transition_delay = prev.front()->gate_delay;
+                } else {
+                    input_transition_delay = 0.0;
+                }
             }
-            out_value = !(input_value[0] || input_value[1]);
         } else if (type == "INVX1") {
             if (input_value.size() != 1) {
                 cerr << name << " INVX1 input value error!" << endl;
+            } else {
+                out_value = !input_value[0];
+                // Primary input delay is 0.0
+                input_transition_delay = (prev.empty()) ? 0.0 : prev.front()->gate_delay;
             }
-            out_value = !input_value[0];
         } else if (type == "NANDX1") {
             if (input_value.size() != 2) {
                 cerr << name << " NANDX1 input value error!" << endl;
+            } else {
+                out_value = !(input_value[0] && input_value[1]);
+                // Primary input delay is 0.0
+                if (prev.size() == 2) {
+                    input_transition_delay = std::max(prev[0]->gate_delay, prev[1]->gate_delay);
+                } else if (prev.size() == 1) {
+                    input_transition_delay = prev.front()->gate_delay;
+                } else {
+                    input_transition_delay = 0.0;
+                }
             }
-            out_value = !(input_value[0] && input_value[1]);
         } else {
             cerr << "Undefined gate name" << endl;
         }
+
+        // Calculate output capacitance, sum of next input cap
+
+
         return out_value;
     }
 };
@@ -99,7 +139,7 @@ public:
     string name;
     vector<string> input;
     vector<string> output;
-    vector<string> wire;
+    map<string, Wire> wires;
     vector<Gate> gates;
     vector<int> output_gates;
     vector<int> topological_order;
@@ -113,14 +153,16 @@ public:
 
     void output_file();
 
-    void calc_output(const vector<string> &in_wires, const vector<bool> &pattern);
+    void calc_output(const vector<string> &in_wires,
+                     const vector<bool> &pattern,
+                     const map<string, CellLibrary> &cells);
 
 private:
     void max_delay_path_calculation(int index, double total_output_net_cap, CellLibrary &cell);
 
     static double
     lookup_table(double &row, double &col, vector<double> &row_index, vector<double> &col_index,
-                 vector<vector<double> > &table);
+                 vector<vector<double>> &table);
 };
 
 void Module::topological_sort() {
@@ -311,10 +353,12 @@ void Module::output_file() {
     fout.close();
 }
 
-void Module::calc_output(const vector<string> &in_wires, const vector<bool> &pattern) {
+void Module::calc_output(const vector<string> &in_wires,
+                         const vector<bool> &pattern,
+                         const map<string, CellLibrary> &cells) {
     // Calculate output for each gate by topological order
     for (auto &idx:topological_order) {
-        gates[idx].calc_output(in_wires, pattern);
+        gates[idx].calc_output(in_wires, pattern, cells);
     }
 }
 
@@ -333,7 +377,7 @@ public:
 
     static void parse_cell_lib(char *file, map<string, CellLibrary> &cells);
 
-    static void parse_module(char *file, Module &m, const map<string, CellLibrary> &cells);
+    static void parse_module(char *file, Module &m, map<string, CellLibrary> &cells);
 
     void parse_pattern(char *pat_name);
 
@@ -605,7 +649,7 @@ void Parser::parse_fall_transition(fstream &fin, CellLibrary &c) {
     }
 }
 
-void Parser::parse_module(char *file, Module &m, const map<string, CellLibrary> &cells) {
+void Parser::parse_module(char *file, Module &m, map<string, CellLibrary> &cells) {
     fstream fin;
     fin.open(file, ios::in);
     if (!fin) {
@@ -635,11 +679,17 @@ void Parser::parse_module(char *file, Module &m, const map<string, CellLibrary> 
         } else if (tokens[0] == "output") {
             for (int i = 1; i < tokens.size(); ++i) {
                 m.output.push_back(tokens[i]);
+                Wire w;
+                w.name = tokens[i];
+                w.net_cap = 0.03;   // Primary output loading is 0.03
+                m.wires.insert(pair<string, Wire>(tokens[i], w));
             }
             continue;
         } else if (tokens[0] == "wire") {
             for (int i = 1; i < tokens.size(); ++i) {
-                m.wire.push_back(tokens[i]);
+                Wire w;
+                w.name = tokens[i];
+                m.wires.insert(pair<string, Wire>(tokens[i], w));
             }
             continue;
         } else {    // Gates
@@ -663,9 +713,14 @@ void Parser::parse_module(char *file, Module &m, const map<string, CellLibrary> 
                         if (port->second.direct == "output") {
                             g.output_port = port_name;
                             g.output_wire = wire_name;
+                            m.wires[wire_name].fan_in = g.name;
                         } else {
                             g.input_ports.push_back(port_name);
                             g.input_wires.push_back(wire_name);
+                            // Add wire net cap
+                            m.wires[wire_name].fan_out.push_back(g.name);
+                            double cap = cell_def.pins[port_name].cap;
+                            m.wires[wire_name].net_cap += cap;
                         }
                     }
                 }
@@ -753,7 +808,7 @@ int main(int argc, char *argv[]) {
     parser.parse_pattern(pattern_path);
     // Simulation process
     for (auto &pat:parser.input_patterns) {
-        module.calc_output(parser.input_wires, pat);
+        module.calc_output(parser.input_wires, pat, cells);
         module.delay(cells);    // TODO: Calc each gate delay based on output value
         module.output_file();
     }
