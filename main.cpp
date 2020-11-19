@@ -2,7 +2,6 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
-#include <cstdio>
 #include <cstdlib>
 #include <string>
 #include <vector>
@@ -141,8 +140,8 @@ public:
     vector<Gate> gates;
     vector<int> output_gates;
     vector<int> topological_order;
-    double global_max_delay;
-    Gate *critical_output_gate;
+    double global_max_delay = 0.0;
+    Gate *critical_output_gate = nullptr;
     list<string> critical_path;
 
     void topological_sort();
@@ -448,14 +447,6 @@ void Module::calc_output_and_delay(const vector<string> &in_wires,
     }
 }
 
-enum line {
-    module,
-    input,
-    output,
-    wire,
-    others
-};
-
 class Parser {
 public:
     vector<string> input_wires;         // Wire order of input patterns
@@ -496,7 +487,6 @@ void Parser::parse_cell_lib(char *file, map<string, CellLibrary> &cells) {
     }
 
     string in, temp;
-    int num;
     stringstream ss;
     vector<double> index_1, index_2;
 
@@ -586,7 +576,7 @@ void Parser::parse_cell(fstream &fin, CellLibrary &c) {
     stringstream ss1, ss2;
     int cnt = 0;
 
-    while (cnt < 4) {   // 4 timing prooerity each cell
+    while (cnt < 4) {   // 4 timing property each cell
         getline(fin, in);
         ss2 << in;
         ss2 >> temp;
@@ -658,7 +648,7 @@ void Parser::parse_cell_rise(fstream &fin, CellLibrary &c) {
 
         vector<double> value;
         while (getline(ss, temp, ',')) {
-            value.push_back(atof(temp.c_str()));
+            value.push_back(strtod(temp.c_str(), nullptr));
         }
         c.cell_rise.push_back(value);
 
@@ -681,7 +671,7 @@ void Parser::parse_cell_fall(fstream &fin, CellLibrary &c) {
 
         vector<double> value;
         while (getline(ss, temp, ',')) {
-            value.push_back(atof(temp.c_str()));
+            value.push_back(strtod(temp.c_str(), nullptr));
         }
         c.cell_fall.push_back(value);
 
@@ -704,7 +694,7 @@ void Parser::parse_rise_transition(fstream &fin, CellLibrary &c) {
 
         vector<double> value;
         while (getline(ss, temp, ',')) {
-            value.push_back(atof(temp.c_str()));
+            value.push_back(strtod(temp.c_str(), nullptr));
         }
         c.rise_transition.push_back(value);
 
@@ -727,7 +717,7 @@ void Parser::parse_fall_transition(fstream &fin, CellLibrary &c) {
 
         vector<double> value;
         while (getline(ss, temp, ',')) {
-            value.push_back(atof(temp.c_str()));
+            value.push_back(strtod(temp.c_str(), nullptr));
         }
         c.fall_transition.push_back(value);
         ss.str("");
@@ -895,7 +885,7 @@ int main(int argc, char *argv[]) {
 
     // Output file
     ofstream file;
-    file.open(module.name + ".txt", ios::out);
+    file.open("309510145_" + module.name + ".txt", ios::out);
     if (!file) cerr << "Fail to create output file!" << endl;
     // Simulation process
     for (auto &pat:parser.input_patterns) {
