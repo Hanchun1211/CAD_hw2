@@ -149,7 +149,7 @@ public:
 
     void calc_critical_path();
 
-    void output_file();
+    void output_file(ofstream &f);
 
     void calc_output_and_delay(const vector<string> &in_wires,
                                const vector<bool> &pattern,
@@ -279,8 +279,23 @@ void Module::calc_critical_path() {
     critical_path.push_front(cur_gate->input_wires.front());
 }
 
-void Module::output_file() {
-
+void Module::output_file(ofstream &f) {
+    f << "Longest delay = " << global_max_delay << ", the path is:" << endl;
+    auto it = critical_path.begin();
+    while (!critical_path.empty()) {
+        f << critical_path.front();
+        critical_path.pop_front();
+        if (!critical_path.empty()) {
+            f << " -> ";
+        } else {
+            f << endl << endl;
+            break;
+        }
+    }
+    for (auto &g:gates) {
+        f << g.name << " " << g.out_value << " " << g.propagation_delay << " " << g.rise_fall_time << endl;
+    }
+    f << endl;
 }
 
 void Module::calc_output_and_delay(const vector<string> &in_wires,
@@ -877,12 +892,16 @@ int main(int argc, char *argv[]) {
     module.topological_sort();
     // Input pattern
     parser.parse_pattern(pattern_path);
+
+    // Output file
+    ofstream file;
+    file.open(module.name + ".txt", ios::out);
+    if (!file) cerr << "Fail to create output file!" << endl;
     // Simulation process
     for (auto &pat:parser.input_patterns) {
         module.calc_output_and_delay(parser.input_wires, pat, cells);
         module.calc_critical_path();
-        // TODO: Output file
-        // module.output_file();
+        module.output_file(file);
     }
 
     return 0;
