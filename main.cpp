@@ -56,9 +56,8 @@ public:
     double output_cap = 0.0;                // Sum of next cap
     double propagation_delay = 0.0;
     double rise_fall_time = 0.0;
-    double gate_delay = 0.0;    // propagation_delay + rise_fall_time
-    double critical_cell_delay = 0.0;       // Global delay
-    double critical_transition = 0.0;       // Global delay
+    double critical_gate_delay = 0.0;       // Critical path propagation_delay to this gate
+    Gate *critical_prev_gate = nullptr;     // Where did critical path from
 
     Gate() = default;
 
@@ -88,13 +87,13 @@ public:
             }
         }
 
-        // Calculate output value and input transition delay
+        // Calculate output value and input transition critical_path
         if (type == "NOR2X1") {
             if (input_value.size() != 2) {
                 cerr << name << " NOR2X1 input value error!" << endl;
             } else {
                 out_value = !(input_value[0] || input_value[1]);
-                // Primary input delay is 0.0
+                // Primary input critical_path is 0.0
                 if (prev.size() == 2) {
                     input_transition_delay = std::max(prev[0]->rise_fall_time, prev[1]->rise_fall_time);
                 } else if (prev.size() == 1) {
@@ -108,7 +107,7 @@ public:
                 cerr << name << " INVX1 input value error!" << endl;
             } else {
                 out_value = !input_value[0];
-                // Primary input delay is 0.0
+                // Primary input critical_path is 0.0
                 input_transition_delay = (prev.empty()) ? 0.0 : prev.front()->rise_fall_time;
             }
         } else if (type == "NANDX1") {
@@ -116,7 +115,7 @@ public:
                 cerr << name << " NANDX1 input value error!" << endl;
             } else {
                 out_value = !(input_value[0] && input_value[1]);
-                // Primary input delay is 0.0
+                // Primary input critical_path is 0.0
                 if (prev.size() == 2) {
                     input_transition_delay = std::max(prev[0]->rise_fall_time, prev[1]->rise_fall_time);
                 } else if (prev.size() == 1) {
@@ -142,13 +141,13 @@ public:
     vector<Gate> gates;
     vector<int> output_gates;
     vector<int> topological_order;
-    vector<double> max_delay;
-    vector<int> max_delay_path_from_prev_gate;
-    int critical_path_out_index{};
+    double global_max_delay;
+    Gate *critical_output_gate;
+    list<string> critical_path;
 
     void topological_sort();
 
-    void delay(map<string, CellLibrary> &cells);
+    void calc_critical_path();
 
     void output_file();
 
@@ -157,8 +156,6 @@ public:
                                map<string, CellLibrary> &cells);
 
 private:
-    void max_delay_path_calculation(int index, double total_output_net_cap, CellLibrary &cell);
-
     static double lookup_table(double &row, double &col,
                                vector<double> &row_index, vector<double> &col_index,
                                vector<vector<double>> &table);
@@ -260,104 +257,36 @@ double Module::lookup_table(double &row, double &col,
            + col_col1 * row_row1 / col2_col1 / row2_row1 * table[index_row2][index_col2];
 }
 
-void Module::max_delay_path_calculation(int cur_gate_index, double total_output_net_cap, CellLibrary &cell) {
-//    int max_path_prev_gate_index = -1;
-//    double prev_max_delay = 0;
-//    double prev_max_transition = 0;
-//    if (!gates[cur_gate_index].prev.empty()) {
-//        prev_max_delay = max_delay[gates[cur_gate_index].prev.front()];
-//        prev_max_transition = gates[gates[cur_gate_index].prev.front()].critical_transition;
-//        max_delay_path_from_prev_gate[cur_gate_index] = gates[cur_gate_index].prev.front();
-//
-//        for (auto lp = gates[cur_gate_index].prev.begin();
-//             lp != gates[cur_gate_index].prev.end(); lp++) {
-//            if (gates[*lp].critical_transition > prev_max_transition) {
-//                prev_max_transition = gates[*lp].critical_transition;
-//            }
-//            if (max_delay[*lp] > prev_max_delay) {
-//                prev_max_delay = max_delay[*lp];
-//                max_delay_path_from_prev_gate[cur_gate_index] = *lp;
-//            }
-//        }
-//    }
-//    max_path_prev_gate_index = max_delay_path_from_prev_gate[cur_gate_index];
-//
-//    double max_input_transition = prev_max_transition;
-//
-//    double cell_rise = lookup_table(max_input_transition, total_output_net_cap, cell.index_2, cell.index_1,
-//                                    cell.cell_rise);
-//    double cell_fall = lookup_table(max_input_transition, total_output_net_cap, cell.index_2, cell.index_1,
-//                                    cell.cell_fall);
-//    gates[cur_gate_index].critical_cell_delay = (cell_rise > cell_fall) ? cell_rise : cell_fall;
-//
-//    double rise_transition = lookup_table(max_input_transition, total_output_net_cap, cell.index_2, cell.index_1,
-//                                          cell.rise_transition);
-//    double fall_transition = lookup_table(max_input_transition, total_output_net_cap, cell.index_2, cell.index_1,
-//                                          cell.fall_transition);
-//    gates[cur_gate_index].critical_transition = (rise_transition + fall_transition) / 2.0;
-//
-//    max_delay[cur_gate_index] = prev_max_delay + gates[cur_gate_index].critical_cell_delay;
-}
+void Module::calc_critical_path() {
+    global_max_delay = 0.0;
+    critical_output_gate = nullptr;
+    critical_path.clear();
+    for (auto &idx:output_gates) {
+        if (gates[idx].critical_gate_delay > global_max_delay) {
+            global_max_delay = gates[idx].critical_gate_delay;
+            critical_output_gate = &gates[idx];
+        }
+    }
 
-void Module::delay(map<string, CellLibrary> &cells) {
-//    for (int i = 0; i < gates.size(); i++) {
-//        max_delay.push_back(0);
-//        max_delay_path_from_prev_gate.push_back(-1);
-//    }
-//
-//    for (int cur_gate_index : topological_order) {
-//        double total_output_net_cap = (gates[cur_gate_index].isOutput) ? 0.03 : 0.0; // Primary output loading is 0.03
-//        for (auto lp = gates[cur_gate_index].next.begin();
-//             lp != gates[cur_gate_index].next.end(); lp++) {
-//            for (int k = 0; k < gates[*lp].input_wires.size(); k++) {
-//                if (gates[cur_gate_index].output_wire == gates[*lp].input_wires[k]) {
-//                    total_output_net_cap += cells[gates[*lp].type].pins[gates[*lp].input_ports[k]].cap;
-//                    break;
-//                }
-//            }
-//        }
-//
-//        max_delay_path_calculation(cur_gate_index, total_output_net_cap, cells[gates[cur_gate_index].type]);
-//    }
-//
-//    critical_path_out_index = output_gates.front();
-//    for (int i = 1; i < output_gates.size(); i++) {
-//        if (max_delay[output_gates[i]] > max_delay[critical_path_out_index])
-//            critical_path_out_index = output_gates[i];
-//    }
+    Gate *cur_gate = critical_output_gate;
+    critical_path.push_front(cur_gate->output_wire);
+    cur_gate = cur_gate->critical_prev_gate;
+    while (cur_gate->critical_prev_gate != nullptr) {
+        critical_path.push_front(cur_gate->output_wire);
+        cur_gate = cur_gate->critical_prev_gate;
+    }
+    critical_path.push_front(cur_gate->output_wire);
+    critical_path.push_front(cur_gate->input_wires.front());
 }
 
 void Module::output_file() {
-    fstream fout;
-    fout.open("timing.txt", ios::out);
-    for (auto &gate : gates) {
-        fout << gate.name << " "
-             << gate.critical_cell_delay << " "
-             << gate.critical_transition << endl;
-    }
-    fout.close();
 
-
-    fout.open("critical_delay_path.txt", ios::out);
-    fout << "Longest delay = " << max_delay[critical_path_out_index] << ", the path is:" << endl;
-    vector<string> max_delay_path;
-    int index = critical_path_out_index;
-    while (max_delay_path_from_prev_gate[index] != -1) {
-        max_delay_path.push_back(gates[index].input_wires.back());
-        index = max_delay_path_from_prev_gate[index];
-    }
-    max_delay_path.push_back(gates[index].input_wires.back());
-    max_delay_path.push_back(gates[index].input_wires.front());
-    for (int i = max_delay_path.size() - 1; i > 0; --i)
-        fout << max_delay_path[i] << " -> ";
-    fout << max_delay_path.front() << endl;
-    fout.close();
 }
 
 void Module::calc_output_and_delay(const vector<string> &in_wires,
                                    const vector<bool> &pattern,
                                    map<string, CellLibrary> &cells) {
-    // Calculate output for each gate by topological order
+    // Calculate output and critical_path for each gate by topological order
     for (auto &idx:topological_order) {
         gates[idx].calc_output(in_wires, pattern, cells);
         gates[idx].output_cap = wires[gates[idx].output_wire].net_cap;
@@ -373,7 +302,134 @@ void Module::calc_output_and_delay(const vector<string> &in_wires,
             gates[idx].rise_fall_time = lookup_table(gates[idx].input_transition_delay, gates[idx].output_cap,
                                                      cell.index_2, cell.index_1, cell.fall_transition);
         }
-        gates[idx].gate_delay = gates[idx].propagation_delay + gates[idx].rise_fall_time;
+
+        // Calculate longest sensitize path
+        string gate_type = gates[idx].type;
+        if (gate_type == "INVX1") {
+            if (gates[idx].prev.empty()) {   // Primary input inverter
+                gates[idx].critical_prev_gate = nullptr;
+                gates[idx].critical_gate_delay = gates[idx].propagation_delay;
+            } else {
+                gates[idx].critical_prev_gate = gates[idx].prev.front();
+                gates[idx].critical_gate_delay =
+                        gates[idx].propagation_delay + gates[idx].prev.front()->critical_gate_delay;
+            }
+        } else if (gate_type == "NOR2X1") {
+            switch (gates[idx].prev.size()) {
+                case 0:
+                    // Primary input NOR gate
+                    gates[idx].critical_prev_gate = nullptr;
+                    gates[idx].critical_gate_delay = gates[idx].propagation_delay;
+                    break;
+                case 1:
+                    // One primary input
+                    if (!gates[idx].prev.front()->out_value) {
+                        if (gates[idx].input_value[0] || gates[idx].input_value[1]) {
+                            // Primary input is 1, don't care prev gate
+                            gates[idx].critical_prev_gate = nullptr;
+                            gates[idx].critical_gate_delay = gates[idx].propagation_delay;
+                        } else {
+                            // Both input are 0, pick prev gate path
+                            gates[idx].critical_prev_gate = gates[idx].prev.front();
+                            gates[idx].critical_gate_delay =
+                                    gates[idx].propagation_delay + gates[idx].prev.front()->critical_gate_delay;
+                        }
+                    } else {
+                        if (gates[idx].input_value[0] && gates[idx].input_value[1]) {
+                            // Primary input is 1, don't care prev gate
+                            gates[idx].critical_prev_gate = nullptr;
+                            gates[idx].critical_gate_delay = gates[idx].propagation_delay;
+                        } else {
+                            // Primary input is 0, pick prev gate path
+                            gates[idx].critical_prev_gate = gates[idx].prev.front();
+                            gates[idx].critical_gate_delay =
+                                    gates[idx].propagation_delay + gates[idx].prev.front()->critical_gate_delay;
+                        }
+                    }
+                    break;
+                case 2:
+                    Gate *prev1, *prev2;
+                    prev1 = gates[idx].prev[0];
+                    prev2 = gates[idx].prev[1];
+                    if (!prev1->out_value && !prev2->out_value) {
+                        // Input are both 0 , pick longer path
+                        Gate *longer = (prev1->critical_gate_delay > prev2->critical_gate_delay) ? prev1 : prev2;
+                        gates[idx].critical_prev_gate = longer;
+                        gates[idx].critical_gate_delay = gates[idx].propagation_delay + longer->critical_gate_delay;
+                    } else if (prev1->out_value && prev2->out_value) {
+                        // Both input are 1, pick shorter path
+                        Gate *shorter = (prev1->critical_gate_delay < prev2->critical_gate_delay) ? prev1 : prev2;
+                        gates[idx].critical_prev_gate = shorter;
+                        gates[idx].critical_gate_delay = gates[idx].propagation_delay + shorter->critical_gate_delay;
+                    } else {
+                        // Only one input is 1, pick that path
+                        Gate *sensitize = (prev1->out_value) ? prev1 : prev2;
+                        gates[idx].critical_prev_gate = sensitize;
+                        gates[idx].critical_gate_delay = gates[idx].propagation_delay + sensitize->critical_gate_delay;
+                    }
+                    break;
+                default:
+                    cerr << "NOR gate fan in error!" << endl;
+            }
+        } else if (gate_type == "NANDX1") {
+            switch (gates[idx].prev.size()) {
+                case 0:
+                    // Primary input NAND gate
+                    gates[idx].critical_prev_gate = nullptr;
+                    gates[idx].critical_gate_delay = gates[idx].propagation_delay;
+                    break;
+                case 1:
+                    // One primary input
+                    if (gates[idx].prev.front()->out_value) {
+                        if (gates[idx].input_value[0] && gates[idx].input_value[1]) {
+                            // Both input are 1, pick prev gate path
+                            gates[idx].critical_prev_gate = gates[idx].prev.front();
+                            gates[idx].critical_gate_delay =
+                                    gates[idx].propagation_delay + gates[idx].prev.front()->critical_gate_delay;
+                        } else {
+                            // Primary input is 0, don't care prev gate
+                            gates[idx].critical_prev_gate = nullptr;
+                            gates[idx].critical_gate_delay = gates[idx].propagation_delay;
+                        }
+                    } else {
+                        if (gates[idx].input_value[0] || gates[idx].input_value[1]) {
+                            // Primary input is 1, pick prev gate path
+                            gates[idx].critical_prev_gate = gates[idx].prev.front();
+                            gates[idx].critical_gate_delay =
+                                    gates[idx].propagation_delay + gates[idx].prev.front()->critical_gate_delay;
+
+                        } else {
+                            // Primary input is 0, don't care prev gate path
+                            gates[idx].critical_prev_gate = nullptr;
+                            gates[idx].critical_gate_delay = gates[idx].propagation_delay;
+                        }
+                    }
+                    break;
+                case 2:
+                    Gate *prev1, *prev2;
+                    prev1 = gates[idx].prev[0];
+                    prev2 = gates[idx].prev[1];
+                    if (prev1->out_value && prev2->out_value) {
+                        // Input are both 1 , pick longer path
+                        Gate *longer = (prev1->critical_gate_delay > prev2->critical_gate_delay) ? prev1 : prev2;
+                        gates[idx].critical_prev_gate = longer;
+                        gates[idx].critical_gate_delay = gates[idx].propagation_delay + longer->critical_gate_delay;
+                    } else if (!prev1->out_value && !prev2->out_value) {
+                        // Both input are 0, pick shorter path
+                        Gate *shorter = (prev1->critical_gate_delay < prev2->critical_gate_delay) ? prev1 : prev2;
+                        gates[idx].critical_prev_gate = shorter;
+                        gates[idx].critical_gate_delay = gates[idx].propagation_delay + shorter->critical_gate_delay;
+                    } else {
+                        // One of the input is 0, pick that path
+                        Gate *sensitize = (!prev1->out_value) ? prev1 : prev2;
+                        gates[idx].critical_prev_gate = sensitize;
+                        gates[idx].critical_gate_delay = gates[idx].propagation_delay + sensitize->critical_gate_delay;
+                    }
+                    break;
+                default:
+                    cerr << "NAND gate fan in error!" << endl;
+            }
+        }
     }
 }
 
@@ -824,8 +880,9 @@ int main(int argc, char *argv[]) {
     // Simulation process
     for (auto &pat:parser.input_patterns) {
         module.calc_output_and_delay(parser.input_wires, pat, cells);
-        module.delay(cells);    // TODO: Calc critical path
-        module.output_file();
+        module.calc_critical_path();
+        // TODO: Output file
+        // module.output_file();
     }
 
     return 0;
